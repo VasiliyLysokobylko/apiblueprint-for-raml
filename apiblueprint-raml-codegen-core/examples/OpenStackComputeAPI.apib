@@ -1,0 +1,3459 @@
+FORMAT: 1A
+
+# OpenStack Compute API vNext
+
+This repository contains a single document (this one) describing a proposed new
+OpenStack Compute API. I've used [API Blueprint](http://apiblueprint.org/)
+for formatting and describing the proposed API.
+
+## Philosophy and Style
+
+This proposed API follows a few guiding principles and style conventions:
+
+ - All API routes and allowed methods are discoverable
+ - All request and response payload schemas are discoverable
+ - No API extensions
+ - No driver implementation leaked into the API
+ - No XML
+ - Semantic versioning shall be enforced for any change to the vNext API
+   contract
+ - No use of a separate `GET /$resource/detail` route for "extra" information
+   about a resource
+ - Asynchronous creation and task callbacks for expensive resources
+ - Removal of any part of the V2 and V3 Compute APIs that doesn't involve
+   Compute functionality
+ - UUID identifiers for everything
+ - API contains only operations that normal and elevated users can do
+
+### API Route Discoverability
+
+Any route in the Compute API should be discoverable via a JSON-Home document
+that is returned on a GET of the root "/" URI. This JSON-Home document should
+describe the URI routes and route templates for the entire API, including
+a mapping of allowed parameters in the URI template and allowed HTTP methods
+for each route.
+
+### Request and Response Payload Schema Discoverability
+
+Each request and response payload should have a schema that is discoverable
+so that clients (machine and human) can determine what is expected for each
+API route.
+
+### No API Extensions
+
+There will be zero API extensions in the vNext Compute API.
+
+### No Implementation in API
+
+Under no circumstances should any underlying choice of hypervisor, network
+vendor or driver, or storage vendor or driver be exposed to the consumer
+of the Compute API.
+
+### No XML
+
+JSON shall be the only transport format for requests and responses in the
+vNext Compute API. This will dramatically reduce the overall footprint of
+the API controller and input validation layer in Nova.
+
+### Semantic Versioning
+
+Any code that introduces any change to the vNext API shall increment the
+semantic versioning of the API. Non-backwards-compatible changes shall
+force a new major version of the API. Backwards-compatible changes shall
+introduce a minor version increment of the current API. Clients should be
+able to incorporate new functionality using semver checks.
+
+### No Extraneous "detail" Non-resource
+
+There will be no separate `GET /$resource/detail` URIs that return "extra"
+information about a resource. Where appropriate, in order to accomodate
+tooling that needs to efficiently check for status or existence of a resource,
+and does not need all information about a resource, a `HEAD /$resource` method
+shall be provided.
+
+### Asynchronous Creation and Task Callbacks
+
+All expensive operations and resource creations shall be handled using
+asynchronous creation calls (returning a `202 Accepted`) that return a
+self-describing link that can be used by the client to call back to the
+API for status information about the expensive operation.
+
+### Compute and Compute-only
+
+As the OpenStack project has evolved, various parts of the original Nova API
+have been replaced by separate service endpoints in Keystone, Glance, Nova,
+and Cinder.
+
+The vNext Compute API does not expose **any** "translation" resources, where
+the Compute API is essentially being a proxy between Nova and these other
+endpoints.
+
+This API strictly focuses on the resources and actions central to a Compute
+API. It is expected that clients directly call the other OpenStack API
+endpoints to request or perform actions related to those other services.
+
+### UUID Identifiers Only
+
+UUIDs are used as identifiers for everything in the API, though some resources
+have GET API calls that allow retrieval by unique combination of project
+and name/slug value.
+
+> **Note**: The intent here is to move Nova away from the use of any
+> sequence-based/autoincrement identifiers for any objects in the API.
+> Sequence/autoincrement primary keys are a big (only?) cause of replication
+> and log shipping conflicts for underlying data storage. The first step to
+> ridding the underlying system of sequential primary keys is to remove the
+> concept of them from the public API.
+
+### API Operations for Normal and Elevated Users Only
+
+The proposed API does not contain any operations that "operators" or "deployers"
+would use. Only operations that normal or "elevated" (admin) users would perform
+are exposed in the Compute API.
+
+This proposed Compute API is meant to focus on the end-user experience, not
+operations that people running bare-metal machines or installing OpenStack would
+need to execute.
+
+This means that the vNext OpenStack Compute API does *not* contain HTTP REST API
+commands for any of the following, which were added as API extensions to previous
+versions of the OpenStack Compute API:
+
+ * `agents` -- the entire concept of running guest agents is the purview of the
+   cloud operator, not a user or even administrator of a cloud.
+ * `cells` and `cells_capabilities` -- these are implementation details, and
+   not anything that an admin of a cloud would care about; in fact, the design
+   of cells should mean specifically that an admin should *not* know about them.
+ * `hypervisors`
+ * `hosts`
+ * `instance_usage_audit_log`
+ * `services`
+ * `baremetal_nodes`
+ * `baremetal_ext_status`
+
+It is fully expected that APIs (not necessarily REST-based ones) can and should
+be provided for operators to perform actions on the above things. They just don't
+belong in the same API that regular users and administrative users use. It's the
+same reason that there isn't a RESTful API for executing database schema
+migrations. It just doesn't make sense to expose that functionality in that way.
+
+## API Conventions
+
+There are a number of common conventions used throughout the API documentation.
+We include them here to avoid having to repeat sections in the specification.
+
+### Common HTTP Return Codes
+
+#### 400 Bad Request
+
+A `400 Bad Request` shall be returned under the following conditions:
+
+ - The payload of a request was malformed
+ - The payload of a request contained invalid or improper input
+ - The payload of a request contained references to non-existing entities
+ - The request would have created a duplicate resource
+ - The server does not implement the requested functionality
+
+#### 401 Unauthorized
+
+A `401 Unauthorized` shall be returned when a requesting user was not
+authenticated by the authenticating service (typically, OpenStack Identity)
+
+#### 403 Forbidden
+
+A `403 Forbidden` shall be returned when the requesting user does not
+have permission to perform the requested action.
+
+#### 404 Not Found
+
+A `404 Not Found` shall be returned when any of the following conditions occur:
+
+ - The URL requested is not found in the API route map
+ - The requested URL was valid, but the entity does not exist
+ - The requested URL was valid, but the entity was not owned or shared with the
+   requesting user
+
+# Group OpenStack Compute API Root
+
+## GET /
+
+Retrieve a JSON Home document that describes the OpenStack Compute API.
+
+> **Note:** For information about JSON-Home, please see the
+> [online specification](http://tools.ietf.org/html/draft-nottingham-json-home-03)
+
++ Response 200 (application/json-home)
+
+```json
+{
+    "resources": {
+        "rel/schemas": {
+            "href-template": "/schemas",
+            "href-vars": {
+            },
+            "hints": {
+                "allow": ["GET"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/schema": {
+            "href-template": "/schemas/{object}",
+            "href-vars": {
+                "object": "param/object"
+            },
+            "hints": {
+                "allow": ["GET"],
+                "formats": {
+                    "application/json": {},
+                    "application/json+schema": {}
+                }
+            }
+        },
+        "rel/placements": {
+            "href-template": "/placements"
+                             "?{limit,marker,tag,parent_placement}",
+            "href-vars": {
+                "limit": "param/limit",
+                "marker": "param/marker",
+                "tag": "param/tag",
+                "parent_placement": "param/parent_placement"
+            },
+            "hints": {
+                "allow": ["GET"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/project": {
+            "href-template": "/projects/{project_id}",
+            "href-vars": {
+                "project_id": "param/project_id"
+            },
+            "hints": {
+                "allow": ["GET"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/server_type": {
+            "href-template": "/server_types/{server_type_id}",
+            "href-vars": {
+                "server_type_id": "param/server_type_id"
+            },
+            "hints": {
+                "allow": ["GET", "PATCH"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/server_type_by_name": {
+            "href-template": "/server_types/{server_type_name}",
+            "href-vars": {
+                "server_type_name": "param/server_type_name"
+            },
+            "hints": {
+                "allow": ["GET"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/server_types": {
+            "href-template": "/server_types"
+                             "?{limit,marker,tag}",
+            "href-vars": {
+                "limit": "param/limit",
+                "marker": "param/marker",
+                "tag": "param/tag"
+            },
+            "hints": {
+                "allow": ["GET", "POST"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/server_task": {
+            "href-template": "/server_tasks/{server_task_id}",
+            "href-vars": {
+                "server_task_id": "param/server_task_id"
+            },
+            "hints": {
+                "allow": ["GET"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/server_tasks": {
+            "href-template": "/server/{server_id}/tasks",
+                             "?(limit,marker,since}",
+            "href-vars": {
+                "server_id": "param/server_id",
+                "limit": "param/limit",
+                "marker": "param/marker",
+                "since": "param/since",
+                "state": "param/state"
+            },
+            "hints": {
+                "allow": ["GET", "POST"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/server": {
+            "href-template": "/servers/{server_id}",
+            "href-vars": {
+                "server_id": "param/server_id"
+            },
+            "hints": {
+                "allow": ["GET", "HEAD", "PATCH"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/servers": {
+            "href-template": "/servers"
+                             "?{limit,marker,since,"
+                             "project,virt_state,power_state,"
+                             "launched_by}"
+            },
+            "href-vars": {
+                "limit": "param/limit",
+                "marker": "param/marker",
+                "since": "param/since",
+                "project": "param/project",
+                "virt_state": "param/virt_state",
+                "power_state": "param/power_state",
+                "launched_by": "param/launched_by"
+            },
+            "hints": {
+                "allow": ["GET"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/server_console_log": {
+            "href-template": "/servers/{server_id}/console_log"
+                             "?(lines)",
+            "href-vars": {
+                "server_id": "param/server_id",
+                "lines": "param/lines"
+            },
+            "hints": {
+                "allow": ["GET"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/project_server": {
+            "href-template": "/project/{project_id}/servers/{server_hostname}",
+            "href-vars": {
+                "project_id": "param/project_id",
+                "server_hostname": "param/server_hostname"
+            },
+            "hints": {
+                "allow": ["GET"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        },
+        "rel/project_servers": {
+            "href-template": "/project/{project_id}/servers"
+                             "?{limit,marker,since,"
+                             "virt_state,power_state,"
+                             "launched_by}"
+            },
+            "href-vars": {
+                "project": "param/project",
+                "limit": "param/limit",
+                "marker": "param/marker",
+                "since": "param/since",
+                "virt_state": "param/virt_state",
+                "power_state": "param/power_state",
+                "launched_by": "param/launched_by"
+            },
+            "hints": {
+                "allow": ["GET", "POST"],
+                "formats": {
+                    "application/json": {}
+                }
+            }
+        }
+    }
+}
+```
+
+# Group Schema
+
+A schema provides a discoverable structure for both objects in the OpenStack
+Compute API as well as expected request and resource structures.
+
+## GET /schemas
+
+Returns a list of discoverable JSON-Schema documents for all objects in the
+API.
+
++ Response 200 (application/json)
+
+```json
+[
+    {
+        "type": "placement",
+        "description": "A placement is a generic container where "
+                       "servers may be placed within a deployment."
+        "_links": {
+            "rel/schema": {
+                "href": "/schemas/placement"
+            }
+        }
+    },
+    {
+        "type": "server_type",
+        "description": "A server type describes the capacity and "
+                       "capabilities of a class of servers.",
+        "_links": {
+            "rel/schema": {
+                "href": "/schemas/server_type"
+            }
+        }
+    },
+    {
+        "type": "server_task",
+        "description": "A server task is a related set of actions that "
+                       "are or have been executed against a server.",
+        "_links": {
+            "rel/schema": {
+                "href": "/schemas/server_task"
+            }
+        }
+    },
+    {
+        "type": "server_task_item",
+        "description": "A server task item is a single action that is "
+                       "executed or event that happens in the course of "
+                       "running a server task against a server.",
+        "_links": {
+            "rel/schema": {
+                "href": "/schemas/server_task_item"
+            }
+        }
+    },
+    {
+        "type": "server",
+        "description": "A server is a virtual machine that runs in an "
+                       "OpenStack cloud. It is owned by a single *project* "
+                       "and is launched from a *server template* that is a "
+                       "base disk image, a bootable volume, or a snapshot of "
+                       "another server.",
+        "_links": {
+            "rel/schema": {
+                "href": "/schemas/server"
+            }
+        }
+    },
+    {
+        "type": "tag",
+        "description": "A tag is a simple string that can be used to "
+                       "categorize a resource. Many resource types in "
+                       "the API can be tagged."
+        "_links": {
+            "rel/schema": {
+                "href": "/schemas/tag"
+            }
+        }
+    },
+    {
+        "type": "property",
+        "description": "A property is a simple key/value pair that can be "
+                       "used by users to describe a resource. Many resource "
+                       "types in the API have a collection of properties."
+        "_links": {
+            "rel/schema": {
+                "href": "/schemas/property"
+            }
+        }
+    },
+]
+```
+
+## GET /schemas/placement
+
+Returns a JSON-Schema document describing the placement object model and
+request/response contract.
+
++ Response 200 (application/json)
+
+```json
+{
+    "type": "object",
+    "title": "Placement",
+    "description": "A placement is a generic container where "
+                   "servers may be placed within a deployment.",
+    "properties": {
+        "id": {
+            "type": "string",
+            "description": "UUID identifier of the placement.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "name": {
+            "type": "string",
+            "description": "A short name for the placement.",
+            "required": true
+        },
+        "description": {
+            "type": "string"
+        },
+        "parent_placement_id": {
+            "type": ["string", "null"]
+            "description": "UUID identifier of this placement's parent "
+                           "placement, if any.",
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "properties": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "String key for the custom property.",
+                        "required": true
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "String value for the custom property.",
+                        "required": true
+                    }
+                }
+            }
+        },
+        "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+        }
+    },
+    "links": [
+        {
+           "title": "List placements",
+           "rel": "placements",
+           "href": "/placements",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum Number of items to return."
+                    },
+                    "marker": {
+                        "type": "string",
+                        "description": "UUID of last record on previous page.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "tag": {
+                        "type": "array",
+                        "description": "Zero or more string tags to match "
+                                       "server types in an OR fashion.",
+                        "items": {"type": "string"}
+                    },
+                    "parent_placement": {
+                        "type": "string",
+                        "description": "UUID identifier of parent placement "
+                                       "to filter results by.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    }
+               }
+           }
+        }
+    ]
+}
+```
+
+## GET /schemas/server_type
+
+Returns a JSON-Schema document describing the server type object model and
+request/response contract.
+
++ Response 200 (application/json)
+
+```json
+{
+    "type": "object",
+    "title": "Server Type",
+    "description": "A server type describes the capacity and "
+                   "capabilities of a class of servers.",
+    "properties": {
+        "id": {
+            "type": "string",
+            "description": "UUID identifier of the server type.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "name": {
+            "type": "string",
+            "description": "The short name for the server type.",
+            "required": true
+        },
+        "description": {
+            "type": "string"
+        },
+        "visibility": {
+            "type": "string",
+            "description": "String indicating whether the server "
+                           "type is publicly visible or shared "
+                           "among a group of private parties.",
+            "enum": [
+                "PUBLIC",
+                "PRIVATE"
+            ],
+            "required": true
+        },
+        "shares": {
+            "type": "object",
+            "properties": {
+                "users": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Zero or more UUIDs of users that this "
+                                   "server type is shared with.",
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Zero or more UUIDs of projects that this "
+                                   "server type is shared with.",
+                }
+            },
+            "additionalProperties": false
+        },
+        "spec": {
+            "type": "object",
+            "properties": {
+                "memory_mb": {
+                    "type": "integer",
+                    "description": "Amount of RAM allocated to servers "
+                                   "launched with this server type, in "
+                                   "megabytes.",
+                    "minimum": 0,
+                    "required": true
+                },
+                "root_disk_db": {
+                    "type": "integer",
+                    "description": "Amount of disk space allocated to the "
+                                   "root disk of servers launched with this "
+                                   "server type, in gigabytes.",
+                    "minimum": 0,
+                    "required": true
+                },
+                "cpu_units": {
+                    "type": "integer",
+                    "description": "Amount of relative CPU allocated to "
+                                   "servers launched with this server type.",
+                    "minimum": 1,
+                    "required": true
+                },
+                "rxtx_factor": {
+                    "type": "number",
+                    "description": "The throttling factor for I/O on servers "
+                                   "launched with this type.",
+                    "minimum": 0.1,
+                },
+                "swap_mb": {
+                    "type": "integer",
+                    "description": "Amount of swap space to allocate for "
+                                   "servers launched with this type in "
+                                   "megabytes.",
+                    "minimum": 0,
+                }
+            }
+        },
+        "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+        }
+    },
+    "links": [
+        {
+           "title": "List server types",
+           "rel": "server_types",
+           "href": "/server_types",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum Number of items to return."
+                    },
+                    "marker": {
+                        "type": "string",
+                        "description": "UUID of last record on previous page.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "tag": {
+                        "type": "array",
+                        "description": "Zero or more string tags to match "
+                                       "server types in an OR fashion.",
+                        "items": {"type": "string"}
+                    }
+               }
+           }
+        },
+        {
+           "title": "Create a new server type",
+           "rel": "server_types",
+           "href": "/server_types",
+           "method": "POST",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The short name for the server type.",
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "visibility": {
+                        "type": "string",
+                        "description": "String indicating whether the server "
+                                       "type is publicly visible or shared "
+                                       "among a group of private parties.",
+                        "enum": [
+                            "PUBLIC",
+                            "PRIVATE"
+                        ]
+                    },
+                    "shares": {
+                        "type": "object",
+                        "properties": {
+                            "users": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Zero or more UUIDs of users that this "
+                                               "server type is shared with.",
+                            },
+                            "projects": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Zero or more UUIDs of projects that this "
+                                               "server type is shared with.",
+                            }
+                        },
+                        "additionalProperties": false
+                    },
+                    "spec": {
+                        "type": "object",
+                        "properties": {
+                            "memory_mb": {
+                                "type": "integer",
+                                "description": "Amount of RAM allocated to servers "
+                                               "launched with this server type, in "
+                                               "megabytes.",
+                                "minimum": 0,
+                                "required": true
+                            },
+                            "root_disk_db": {
+                                "type": "integer",
+                                "description": "Amount of disk space allocated to the "
+                                               "root disk of servers launched with this "
+                                               "server type, in gigabytes.",
+                                "minimum": 0,
+                                "required": true
+                            },
+                            "cpu_units": {
+                                "type": "integer",
+                                "description": "Amount of relative CPU allocated to "
+                                               "servers launched with this server type.",
+                                "minimum": 1,
+                                "required": true
+                            },
+                            "rxtx_factor": {
+                                "type": "number",
+                                "description": "The throttling factor for I/O on servers "
+                                               "launched with this type.",
+                                "minimum": 0.1,
+                            },
+                            "swap_mb": {
+                                "type": "integer",
+                                "description": "Amount of swap space to allocate for "
+                                               "servers launched with this type in "
+                                               "megabytes.",
+                                "minimum": 0,
+                            }
+                        }
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+               },
+               "required": ["name"]
+           }
+        },
+        {
+           "title": "Modify a server type",
+           "rel": "server_type",
+           "href": "/server_types/{id}",
+           "method": "PATCH",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "UUID identifier of the server type.",
+                        "required": true,
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "The short name for the server type.",
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "visibility": {
+                        "type": "string",
+                        "description": "String indicating whether the server "
+                                       "type is publicly visible or shared "
+                                       "among a group of private parties.",
+                        "enum": [
+                            "PUBLIC",
+                            "PRIVATE"
+                        ]
+                    },
+                    "spec": {
+                        "type": "object",
+                        "properties": {
+                            "memory_mb": {
+                                "type": "integer",
+                                "description": "Amount of RAM allocated to servers "
+                                               "launched with this server type, in "
+                                               "megabytes.",
+                                "minimum": 0,
+                                "required": true
+                            },
+                            "root_disk_db": {
+                                "type": "integer",
+                                "description": "Amount of disk space allocated to the "
+                                               "root disk of servers launched with this "
+                                               "server type, in gigabytes.",
+                                "minimum": 0,
+                                "required": true
+                            },
+                            "cpu_units": {
+                                "type": "integer",
+                                "description": "Amount of relative CPU allocated to "
+                                               "servers launched with this server type.",
+                                "minimum": 1,
+                                "required": true
+                            },
+                            "rxtx_factor": {
+                                "type": "number",
+                                "description": "The throttling factor for I/O on servers "
+                                               "launched with this type.",
+                                "minimum": 0.1,
+                            },
+                            "swap_mb": {
+                                "type": "integer",
+                                "description": "Amount of swap space to allocate for "
+                                               "servers launched with this type in "
+                                               "megabytes.",
+                                "minimum": 0,
+                            }
+                        }
+                    }
+               }
+           }
+        }
+    ]
+}
+```
+
+## GET /schemas/server_task
+
+Returns a JSON-Schema document describing the server task object model and
+request/response contract.
+
++ Response 200 (application/json)
+
+```json
+{
+    "type": "object",
+    "title": "Server Task",
+    "description": "A server task is a related set of actions that are or "
+                   "have been executed against a server.",
+    "properties": {
+        "id": {
+            "type": "string",
+            "description": "UUID identifier of the server task.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "state": {
+            "type": "string",
+            "description": "String code for the overall state of the task.",
+            "required": true,
+            "enum": [
+                "RUNNING",
+                "COMPLETED",
+                "ABORTED",
+                "TIMED_OUT"
+            ]
+        },
+        "action": {
+            "type": "string",
+            "description": "String action code for the purpose of the task.",
+            "required": true,
+            "enum": [
+                "CREATE",
+                "SNAPSHOT",
+                "BACKUP",
+                "UPDATE_PASSWORD",
+                "RESIZE",
+                "REBOOT",
+                "HARD_REBOOT",
+                "PAUSE",
+                "UNPAUSE",
+                "SUSPEND",
+                "RESUME",
+                "POWER_OFF",
+                "POWER_ON",
+                "RESCUE",
+                "UNRESCUE",
+                "REBUILD",
+                "MOVE",
+                "TERMINATE",
+                "RESTORE",
+                "SHELVE",
+                "SHELVE_OFFLOAD",
+                "UNSHELVE",
+                "ATTACH_BLOCK_DEVICE",
+                "DETACH_BLOCK_DEVICE",
+                "ATTACH_NETWORK_INTERFACE",
+                "DETACH_NETWORK_INTERFACE"
+            ]
+        },
+        "created_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of when the task was created.",
+            "required": true,
+            "format": "datetime"
+        },
+        "created_by": {
+            "type": "string",
+            "description": "UUID identifier of user that created the server "
+                           "task.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "server_id": {
+            "type": "string",
+            "description": "UUID identifier of the server that this task "
+                           "belongs to.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        }
+    },
+    "links": [
+        {
+           "title": "List server tasks",
+           "rel": "server_tasks",
+           "href": "/servers/{server}/tasks",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "UUID identifier of the server that this task "
+                                       "belongs to.",
+                        "required": true,
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum Number of items to return."
+                    },
+                    "marker": {
+                        "type": "string",
+                        "description": "UUID of last record on previous page.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "ISO 8601 timestamp in UTC timezone "
+                                       "to filter tasks created since.",
+                        "format": "datetime"
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": "Filter tasks in specified state."
+                    }
+               }
+           }
+        },
+        {
+           "title": "Create a new server task",
+           "rel": "server_tasks",
+           "href": "/servers/{server}/tasks",
+           "method": "POST",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "UUID identifier of the server that this task "
+                                       "belongs to.",
+                        "required": true,
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": "String action code for the purpose of the task.",
+                        "required": true,
+                        "enum": [
+                            "SNAPSHOT",
+                            "BACKUP",
+                            "UPDATE_PASSWORD",
+                            "RESIZE",
+                            "REBOOT",
+                            "HARD_REBOOT",
+                            "PAUSE",
+                            "UNPAUSE",
+                            "SUSPEND",
+                            "RESUME",
+                            "POWER_OFF",
+                            "POWER_ON",
+                            "RESCUE",
+                            "UNRESCUE",
+                            "REBUILD",
+                            "MOVE",
+                            "TERMINATE",
+                            "RESTORE",
+                            "SHELVE",
+                            "SHELVE_OFFLOAD",
+                            "UNSHELVE",
+                            "ATTACH_BLOCK_DEVICE",
+                            "DETACH_BLOCK_DEVICE",
+                            "ATTACH_NETWORK_INTERFACE",
+                            "DETACH_NETWORK_INTERFACE"
+                        ]
+                    }
+               }
+           }
+        }
+    }
+}
+```
+
+## GET /schemas/server_task_item
+
+Returns a JSON-Schema document describing the server task item object model
+and request/response contract.
+
++ Response 200 (application/json)
+
+```json
+{
+    "type": "object",
+    "title": "Server Task Item",
+    "description": "A server task is a related set of actions that are or "
+                   "have been executed against a server.",
+    "properties": {
+        "id": {
+            "type": "string",
+            "description": "UUID identifier of the server task item.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "state": {
+            "type": "string",
+            "description": "String code for the overall state of the item.",
+            "required": true,
+            "enum": [
+                "RUNNING",
+                "WAITING",
+                "COMPLETED",
+                "ABORTED",
+                "TIMED_OUT"
+            ]
+        },
+        "action": {
+            "type": "string",
+            "description": "String action code for what the item does.",
+            "required": true,
+            "enum": [
+                "SCHEDULING",
+                "BLOCK_DEVICE_MAPPING",
+                "NETWORKING",
+                "SPAWNING",
+                "SNAPSHOTTING",
+                "UPLOADING",
+                "UPDATING_PASSWORD",
+                "PREPARING",
+                "MIGRATING",
+                "FINALIZING",
+                "REBOOTING",
+                "PAUSING",
+                "UNPAUSING",
+                "SUSPENDING",
+                "RESUMING",
+                "POWERING_OFF",
+                "POWERING_ON",
+                "RESCUING",
+                "UNRESCUING",
+                "REBUILDING",
+                "REBUILDING_BLOCK_DEVICES",
+                "TERMINATING",
+                "RESTORING",
+                "SHELVING",
+                "PREPARING_UPLOAD",
+                "SHELVING_OFFLOADING",
+                "UNSHELVING",
+                "ATTACHING_BLOCK_DEVICE",
+                "DETACHING_BLOCK_DEVICE",
+                "ATTACHING_NETWORK_INTERFACE",
+                "DETACHING_NETWORK_INTERFACE"
+            ]
+        },
+        "created_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of when the item was created.",
+            "required": true,
+            "format": "datetime"
+        },
+        "started_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of when the item was started.",
+            "required": true,
+            "format": "datetime"
+        },
+        "ended_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of when the item was ended.",
+            "format": "datetime"
+        },
+        "task_id": {
+            "type": "string",
+            "description": "UUID identifier of the server task that this item "
+                           "belongs to.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        }
+    },
+    "links": [
+        {
+           "title": "List server task items",
+           "rel": "server_task_items",
+           "href": "/servers_tasks/{task}/items",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "UUID identifier of the task that this item "
+                                       "belongs to.",
+                        "required": true,
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum Number of items to return."
+                    },
+                    "marker": {
+                        "type": "string",
+                        "description": "UUID of last record on previous page.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "ISO 8601 timestamp in UTC timezone "
+                                       "to filter items created since.",
+                        "format": "datetime"
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": "Filter items in specified state."
+                    }
+               }
+           }
+        }
+    }
+}
+```
+
+## GET /schemas/server
+
+Returns a JSON-Schema document describing the server object model
+and request/response contract.
+
++ Response 200 (application/json)
+
+```json
+{
+    "type": "object",
+    "title": "Server",
+    "description": "A server is a virtual machine that runs in an OpenStack "
+                   "cloud. It is owned by a single *project* and is launched "
+                   "from a *server template* that is a base disk image, a "
+                   "bootable volume, or a snapshot of another server.",
+    "properties": {
+        "hostname": {
+            "type": "string",
+            "description": "This is the hostname of the server. It must be "
+                           "unique among all servers within a project.",
+            "required": true
+        },
+        "id": {
+            "type": "string",
+            "description": "UUID identifier of the server.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "launch_keypair_id": {
+            "type": "string",
+            "description": "UUID identifier of the key pair originally used "
+                           "when launching the server.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "launched_by": {
+            "type": "string",
+            "description": "UUID identifier of user that created the server.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "launched_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of when the item was launched.",
+            "required": true,
+            "format": "datetime"
+        },
+        "project_id": {
+            "type": "string",
+            "description": "UUID identifier of project that owns the server."
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "power_state": {
+            "type": "string",
+            "description": "The power state of the server.",
+            "required": true,
+            "enum": [
+                "RUNNING",
+                "PAUSED",
+                "SHUTDOWN",
+                "CRASHED",
+                "SUSPENDED"
+            ]
+        },
+        "virt_state": {
+            "type": "string",
+            "description": "The 'virt state' of the server.",
+            "required": true,
+            "enum": [
+                "ACTIVE",
+                "BUILDING",
+                "PAUSED",
+                "SUSPENDED",
+                "STOPPED",
+                "RESCUED",
+                "RESIZED",
+                "TERMINATED",
+                "SHELVED",
+                "SHELVED_OFFLOADED",
+                "ERROR"
+            ]
+        },
+        "placement_id": {
+            "type": "string",
+            "description": "UUID identifier of the placement this server "
+                           "lives in.",
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "template_id": {
+            "type": "string",
+            "description": "UUID identifier of the server template used "
+                           "to launch this server."
+            "required": true,
+            "maxLength": "36",
+            "minLength": "32"
+        },
+        "block_devices": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "device": {
+                        "type": "string",
+                        "description": "The device name, in path form (e.g. /dev/sda)."
+                        "required": true
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": "The type of device this is.",
+                        "enum": {
+                            "EPHEMERAL",
+                            "PERSISTENT"
+                        }
+                    }
+                }
+            }
+        },
+        "spec": {
+            "type": "object",
+            "properties": {
+                "memory_mb": {
+                    "type": "integer",
+                    "description": "Amount of RAM allocated to the server, "
+                                   "in megabytes.",
+                    "minimum": 0,
+                    "required": true
+                },
+                "root_disk_db": {
+                    "type": "integer",
+                    "description": "Amount of disk space allocated to the "
+                                   "root disk of the server, in gigabytes.",
+                    "minimum": 0,
+                    "required": true
+                },
+                "cpu_units": {
+                    "type": "integer",
+                    "description": "Amount of relative CPU allocated to "
+                                   "the server.",
+                    "minimum": 1,
+                    "required": true
+                },
+                "rxtx_factor": {
+                    "type": "number",
+                    "description": "The throttling factor for I/O on the "
+                                   "server.",
+                    "minimum": 0.1,
+                },
+                "swap_mb": {
+                    "type": "integer",
+                    "description": "Amount of swap space allocated for "
+                                   "the server.",
+                    "minimum": 0,
+                }
+            }
+        },
+        "networking": {
+            "type": "object",
+            "properties": {
+                "access": {
+                    "type": "object",
+                    "description": "A set of IP addresses that may be used "
+                                   "for accessing the server. These addresses "
+                                   "have commonly been called floating IP "
+                                   "addresses.",
+                    "properties": {
+                        "ip4": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                        },
+                        "ip6": {
+                            "type": "string",
+                            "items": {"type": "string"}
+                        }
+                    }
+                },
+                "interfaces": {
+                    "type": "array",
+                    "description": "A list of a dictionaries describing the server's "
+                                   "network interfaces.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "The name of the interface (e.g. eth0)."
+                                "required": true
+                            },
+                            "ip4": {
+                                "type": "string",
+                                "description": "IPv4 address of the interface."
+                            },
+                            "ip6": {
+                                "type": "string",
+                                "description": "IPv6 address of the interface."
+                            },
+                            "mac": {
+                                "type": "string",
+                                "description": "Optional MAC address of the interface."
+                            }
+                        }
+                    }
+                },
+            }
+        },
+        "properties": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "String key for the custom property.",
+                        "required": true
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "String value for the custom property.",
+                        "required": true
+                    }
+                }
+            }
+        },
+        "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+        }
+    },
+    "links": [
+        {
+           "title": "List servers in project",
+           "rel": "project_servers",
+           "href": "/projects/{project}/servers",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "UUID identifier of the project to search for "
+                                       "servers in.",
+                        "required": true,
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum Number of items to return."
+                    },
+                    "marker": {
+                        "type": "string",
+                        "description": "UUID of last record on previous page.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "ISO 8601 timestamp in UTC timezone "
+                                       "to filter servers launched since.",
+                        "format": "datetime"
+                    },
+                    "virt_state": {
+                        "type": "string",
+                        "description": "Filter servers in specified virt state."
+                    },
+                    "power_state": {
+                        "type": "string",
+                        "description": "Filter servers in specified power state."
+                    },
+                    "launched_by": {
+                        "type": "string",
+                        "description": "Filter servers by UUID of user who launched it.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+               }
+           }
+        },
+        {
+           "title": "List servers",
+           "rel": "servers",
+           "href": "/servers",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "UUID identifier of the project to search for "
+                                       "servers in.",
+                        "required": true,
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum Number of items to return."
+                    },
+                    "marker": {
+                        "type": "string",
+                        "description": "UUID of last record on previous page.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "ISO 8601 timestamp in UTC timezone "
+                                       "to filter servers launched since.",
+                        "format": "datetime"
+                    },
+                    "virt_state": {
+                        "type": "string",
+                        "description": "Filter servers in specified virt state."
+                    },
+                    "power_state": {
+                        "type": "string",
+                        "description": "Filter servers in specified power state."
+                    },
+                    "launched_by": {
+                        "type": "string",
+                        "description": "Filter servers by UUID of user who launched it.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    }
+               }
+           }
+        },
+        {
+           "title": "Modify a server",
+           "rel": "server",
+           "href": "/servers/{id}",
+           "method": "PATCH",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "UUID identifier of the server to update.",
+                        "required": true,
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "If changing ownership of this server from one "
+                                       "project to another, this field would be set "
+                                       "to the UUID identifier of the new owning project.",
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "hostname": {
+                        "type": "string",
+                        "description": "This is the hostname of the server. It must be "
+                                       "unique among all servers within a project."
+                    }
+               }
+           }
+        },
+        {
+           "title": "Create a new server",
+           "rel": "project_servers",
+           "href": "/projects/{project}/servers",
+           "method": "POST",
+           "schema": {
+               "type": "object",
+               "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "UUID identifier of the project to search for "
+                                       "servers in.",
+                        "required": true,
+                        "maxLength": "36",
+                        "minLength": "32"
+                    },
+                    "defaults": {
+                        "type": "object",
+                        "description": "A collection of instructions to help Nova place "
+                                       "new server instances close to or away from other "
+                                       "resources.",
+                        "properties": {
+                            "affinity": {
+                                "type": "object",
+                                "properties": {
+                                    "near": {
+                                        "type": "object",
+                                        "properties": {
+                                            "server_ids": {
+                                                "type": "array",
+                                                "description": "List of UUIDs that Nova uses to look up servers "
+                                                               "that new servers should be placed near.",
+                                                "items": {"type": "string"}
+                                            },
+                                            "server_tags": {
+                                                "type": "array",
+                                                "description": "List of tags that Nova uses to look up servers "
+                                                               "that new servers should be placed near.",
+                                                "items": {"type": "string"}
+                                            }
+                                        },
+                                        "additionalProperties": false
+                                    },
+                                    "not_near": {
+                                        "type": "object",
+                                        "properties": {
+                                            "server_ids": {
+                                                "type": "array",
+                                                "description": "List of UUIDs that Nova uses to look up servers "
+                                                               "that new servers should NOT be placed near.",
+                                                "items": {"type": "string"}
+                                            },
+                                            "server_tags": {
+                                                "type": "array",
+                                                "description": "List of tags that Nova uses to look up servers "
+                                                               "that new servers should NOT be placed near.",
+                                                "items": {"type": "string"}
+                                            }
+                                        },
+                                        "additionalProperties": false
+                                    }
+                                },
+                                "additionalProperties": false
+                            },
+                            "hostname_pattern": {
+                                "type": "string",
+                                "description": "A regex expression that may be used to "
+                                               "define hostnames for multiple servers "
+                                               "launched in this request. The "
+                                               "`%(rand_name)d` symbol is interpolated "
+                                               "as a random number. You can limit the "
+                                               "number of digits by specifying a length, "
+                                               "like so: `%(rand_num)5d`."
+                            },
+                            "keypair_id": {
+                                "type": "string",
+                                "description": "UUID identifier of the keypair to use by default "
+                                               "for servers created with this request.",
+                                "required": true,
+                                "maxLength": "36",
+                                "minLength": "32"
+                            },
+                            "placement_id": {
+                                "type": "string",
+                                "description": "Optional UUID identifier of the placement "
+                                               "servers created with this request should be in.",
+                                "maxLength": "36",
+                                "minLength": "32"
+                            },
+                            "template_id": {
+                                "type": "string",
+                                "description": "Optional UUID identifier of the server "
+                                               "template to use by default for servers "
+                                               "created with this request.",
+                                "maxLength": "36",
+                                "minLength": "32"
+                            },
+                            "type_id": {
+                                "type": "string",
+                                "description": "Optional UUID identifier of the server "
+                                               "type to use by default for servers "
+                                               "created with this request.",
+                                "maxLength": "36",
+                                "minLength": "32"
+                            },
+                            "user_data": {
+                                "type": "string",
+                                "description": "base64-encoded string of user data to use by "
+                                               "default for servers created with this request."
+                            }
+                        }
+                    },
+                    "servers": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "affinity": {
+                                    "type": "object",
+                                    "properties": {
+                                        "near": {
+                                            "type": "object",
+                                            "properties": {
+                                                "server_ids": {
+                                                    "type": "array",
+                                                    "description": "List of UUIDs that Nova uses to look up servers "
+                                                                   "that this server should be placed near.",
+                                                    "items": {"type": "string"}
+                                                },
+                                                "server_tags": {
+                                                    "type": "array",
+                                                    "description": "List of tags that Nova uses to look up servers "
+                                                                   "that this server should be placed near.",
+                                                    "items": {"type": "string"}
+                                                }
+                                            },
+                                            "additionalProperties": false
+                                        },
+                                        "not_near": {
+                                            "type": "object",
+                                            "properties": {
+                                                "server_ids": {
+                                                    "type": "array",
+                                                    "description": "List of UUIDs that Nova uses to look up servers "
+                                                                   "that this server should NOT be placed near.",
+                                                    "items": {"type": "string"}
+                                                },
+                                                "server_tags": {
+                                                    "type": "array",
+                                                    "description": "List of tags that Nova uses to look up servers "
+                                                                   "that this server should NOT be placed near.",
+                                                    "items": {"type": "string"}
+                                                }
+                                            },
+                                            "additionalProperties": false
+                                        }
+                                    },
+                                    "additionalProperties": false
+                                },
+                                "hostname": {
+                                    "type": "string",
+                                    "description": "Override any generated (from hostname_pattern) hostname "
+                                                   "for this server."
+                                },
+                                "keypair_id": {
+                                    "type": "string",
+                                    "description": "Optional UUID identifier of the keypair to use for this server.",
+                                    "maxLength": "36",
+                                    "minLength": "32"
+                                },
+                                "placement_id": {
+                                    "type": "string",
+                                    "description": "Optional UUID identifier of the placement this server should be in.",
+                                    "maxLength": "36",
+                                    "minLength": "32"
+                                },
+                                "template_id": {
+                                    "type": "string",
+                                    "description": "Optional UUID identifier of the server template to use.",
+                                    "maxLength": "36",
+                                    "minLength": "32"
+                                },
+                                "type_id": {
+                                    "type": "string",
+                                    "description": "Optional UUID identifier of the server type to use."
+                                    "maxLength": "36",
+                                    "minLength": "32"
+                                },
+                                "user_data": {
+                                    "type": "string",
+                                    "description": "base64-encoded string of user data to use.",
+                                }
+                            }
+                        }
+                    }
+               }
+           }
+        }
+    }
+}
+```
+
+## GET /schemas/tag
+
+Returns a JSON-Schema document describing the tag object model.
+
++ Response 200 (application/json)
+
+```json
+{
+    "type": "string",
+    "description": "A tag is a simple string that can be used to "
+                   "categorize a resource. Many resource types in "
+                   "the API can be tagged."",
+    "maxLength": "50",
+    "minLength": "1"
+}
+```
+
+## GET /schemas/property
+
+Returns a JSON-Schema document describing the property object model.
+
++ Response 200 (application/json)
+
+```json
+{
+    "type": "object",
+    "title": "Property",
+    "description": "A property is a simple key/value pair that can be "
+                   "used by users to describe a resource. Many resource "
+                   "types in the API have a collection of properties.",
+    "properties": {
+        "key": {
+            "type": "string",
+            "description": "The key of the key/value pair.",
+            "maxLength": "50",
+            "minLength": "1"
+        },
+        "value": {
+            "type": "string",
+            "description": "The value of the key/value pair.",
+        }
+    }
+}
+```
+
+# Group Placement
+
+A placement is a generic container of compute resources. It may have zero
+or more child placements.
+
+> **Note**: A placement does *NOT* demarcate any *implicit* independent failure
+> domain in the way that an AWS EC2 availability zone has an implicit guarantee
+> that resources in that EC2 availability zone are running on hardware that does
+> not share network or compute gear with another EC2 availability zone. It is up
+> to the deployer to decide whether a particular placement should advertise itself
+> as a being an independent failure domain from another placement.
+
+## GET /placements{?limit,marker,tag,parent_placement}
+
+Retrieve a collection of placements.
+
++ Parameters
+    + limit = `20` (optional, number) ... Maximum number of results to return
+    + marker (optional, string, `1593e080-a354-11e3-a5e2-0800200c9a66`) ... A UUID
+      identifier of the last record on the previous page of results.
+    + tag (optional, multiple string, `general-purpose`) ... Filters the results on
+      placements with any matching tag.
+
++ Response 200 (application/json)
+
+```json
+{
+    "placements": [
+        {
+            "description": "Networking and compute resources on high-end hardware.",
+            "id": "1b537672-ab41-44b8-864d-f6d11945c645",
+            "name": "gold",
+            "parent_placement_id": null,
+            "properties": {},
+            "tags": [
+                "high-io",
+            ],
+            "_links": {
+                "self": {
+                    "href": "/placements/1b537672-ab41-44b8-864d-f6d11945c645"
+                },
+                "children": {
+                    "href": "/placements/parent_placement=1b537672-ab41-44b8-864d-f6d11945c645"
+                },
+                "describedby": {
+                    "href": "/schemas/placement"
+                }
+            }
+        },
+        {
+            "description": "US Government compute resources",
+            "id": "c1bf4356-d408-4623-9fb9-f244e248e2e3",
+            "name": "us-gov",
+            "parent_placement_id": null,
+            "properties": {},
+            "tags": [
+                "secure",
+            ],
+            "_links": {
+                "self": {
+                    "href": "/placements/c1bf4356-d408-4623-9fb9-f244e248e2e3"
+                },
+                "children": {
+                    "href": "/placements/parent_placement=c1bf4356-d408-4623-9fb9-f244e248e2e3"
+                },
+                "describedby": {
+                    "href": "/schemas/placement"
+                }
+            }
+        }
+    ],
+    "_links": {
+        "self": {
+            "href": "/placements?limit=2"
+        },
+        "next": {
+            "href": "/placements?limit=2&marker=1593e080-a354-11e3-a5e2-0800200c9a66"
+        }
+    }
+}
+```
+
+# Group Project
+
+A project is a grouping of related server resources.
+
+## GET /projects/{id}
+
+Retrieve links to project resource by a project's *id*.
+
++ Parameters
+    + id (string, `a7728150-a34f-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the project.
+
++ Response 200 (application/json)
+
+```json
+{
+    "_links": {
+        "rel/project_servers": {
+            "href": "/projects/a7728150-a34f-11e3-a5e2-0800200c9a66/servers"
+        }
+    }
+}
+```
+
+# Group Server Type
+
+A server type describes the capacity and capabilities of a class of servers.
+
+## POST /server_types
+
+Create a new server type.
+
+When creating a server type, you can specify a number of attributes:
+
+ - `name` (required, string, `custom.xlarge`) ... A short name for the
+   server type.
+ - `description` (optional, string, `My cool type`) ... Longer description
+   of the server type.
+ - `spec.memory_mb` (required, number, `32768`) ... Number of megabytes memory
+   allocated to servers with this type.
+ - `spec.root_disk_gb` = `10` (optional, number, `100`) ... Number of gigabytes
+   to allocate for the root disk.
+ - `spec.cpu_units` (required, number, `12`) ... Number of CPU units that
+   servers with this type will be allocated.
+ - `spec.rxtx_factor` (optional, number, `2.0` ... The throttling factor for
+   I/O on servers launched with this type.
+ - `spec.swap_mb` (optional, number, `32768`) ... Amount of swap space to
+   allocate for servers launched with this type.
+ - `tags` (optional, list of strings) ... List of strings to tag the type
+   with.
+ - `visibility` = `PRIVATE` (optional, string) ... Indicates whether a
+   server type is publicly visible or privately shared among a group
+   of users or projects. See discussion of visibility choices below.
+
+The *visibility* attribute can be one of the following:
+
+ - `PUBLIC` ... Anyone can see this type when listing server types.
+ - `PRIVATE` ... The creating user and any user or project they share the
+   type with can see this type when listing server types.
+
+When the visibility of a server type is `PRIVATE`, the creating user may
+share the server type with a set of users and projects. The `shares` attribute
+of a server type has two components: `users` and `projects`. The `users`
+component is a list of user UUIDs that the server type is shared with. The
+`projects` component is a similar list of project UUIDs that the server type
+is shared with. The list of user UUIDs shall be checked **first** when
+determining access to a server type.
+
+> **Note**: Many deployments of OpenStack Compute will choose not to allow
+> regular users to create server types with a visibility of `PUBLIC`, and
+> if a regular user tries to issue a create of a publicly-visible server
+> type, the API shall return a `403 Forbidden`
+
++ Request (application/json)
+
+```json
+{
+    "description": "A good enough server type",
+    "name": "good.enough",
+    "shares": {
+        "users": [
+            "781247cf-7bec-4e84-86ea-3cbcee48ae6d",
+            "60536efb-2e6e-4efc-9d39-fe8113292e52"
+        ],
+        "projects": [
+            "fd2ab3c0-d822-437f-b956-9e60e7d0fb69"
+        ]
+    },
+    "spec": {
+        "memory_mb": 1024,
+        "root_disk_gb": 8,
+        "cpu_units": 2,
+        "rxtx_factor": 1.0,
+        "swap_mb": 2048
+    },
+    "tags": [],
+    "visibility": "PRIVATE"
+}
+```
+
++ Response 201 (application/json)
+
+```json
+{
+    "description": "A good enough server type",
+    "id": "7220d0e6-b5c6-451e-b611-27254acf2a77",
+    "name": "good.enough",
+    "shares": {
+        "users": [
+            "781247cf-7bec-4e84-86ea-3cbcee48ae6d",
+            "60536efb-2e6e-4efc-9d39-fe8113292e52"
+        ],
+        "projects": [
+            "fd2ab3c0-d822-437f-b956-9e60e7d0fb69"
+        ]
+    },
+    "spec": {
+        "memory_mb": 1024,
+        "root_disk_gb": 8,
+        "cpu_units": 2,
+        "rxtx_factor": 1.0,
+        "swap_mb": 2048
+    },
+    "tags": [],
+    "visibility": "PRIVATE",
+    "_links":  {
+        "self": {
+            "href": "/server_types/7220d0e6-b5c6-451e-b611-27254acf2a77"
+        },
+        "tags": {
+            "href": "/server_types/7220d0e6-b5c6-451e-b611-27254acf2a77/tags"
+        },
+        "describedby": {
+            "href": "/schemas/server_type"
+        }
+    }
+}
+```
+
+## /server_types/{id}
+
++ Parameters
+    + id (string, `7a6aba30-a3c0-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server type
+
+### PATCH
+
+Modify a server type by its *id*.
+
+> **Note**: The *shares* and *tags* attributes of the server type may not
+> be specified in the request payload. You may add or remove tags and
+> sharing properties using the separate `tags` and `shares` collections.
+
+> **Note**: Many deployments of OpenStack Compute will choose not to allow
+> regular users to create server types with a visibility of `PUBLIC`, and
+> if a regular user tries to modify a private server type to a public one,
+> the API shall return a `403 Forbidden`
+
++ Request (application/json)
+
+```json
+{
+    "description": "A good enough server type",
+    "name": "good.enough",
+    "spec": {
+        "memory_mb": 1024,
+        "root_disk_gb": 8,
+        "cpu_units": 2,
+        "rxtx_factor": 1.0,
+        "swap_mb": 2048
+    },
+    "visibility": "PRIVATE"
+}
+```
+
++ Response 204
+
+### GET
+
+Retrieve a server type by its *id*.
+
++ Response 200 (application/json)
+
+```json
+{
+    "description": "General purpose low-CPU, low-memory, "
+                   "small-root-disk type of server.",
+    "id": "7a6aba30-a3c0-11e3-a5e2-0800200c9a66",
+    "name": "m1.micro",
+    "shares": {},
+    "spec": {
+        "memory_mb": 128,
+        "root_disk_gb": 8,
+        "cpu_units": 1,
+        "rxtx_factor": 1.0,
+        "swap_mb": 128
+    },
+    "tags": [
+        "general-purpose"
+    ],
+    "visibility": "PUBLIC",
+    "_links":  {
+        "self": {
+            "href": "/server_types/7a6aba30-a3c0-11e3-a5e2-0800200c9a66"
+        },
+        "describedby": {
+            "href": "/schemas/server_type"
+        }
+    }
+}
+```
+
+### DELETE
+
+Permanently delete a server type by its *id*.
+
++ Response 204 (application/json)
+
+## GET /server_types/{name}
+
+Retrieve a server type by its *name*.
+
++ Parameters
+    + name (string, `m1.micro`) ... A unique name identifier of the server type
+
++ Response 200 (application/json)
+
+```json
+{
+    "description": "General purpose low-CPU, low-memory, "
+                   "small-root-disk type of server.",
+    "id": "7a6aba30-a3c0-11e3-a5e2-0800200c9a66",
+    "name": "m1.micro",
+    "shares": {},
+    "spec": {
+        "memory_mb": 128,
+        "root_disk_gb": 8,
+        "cpu_units": 1,
+        "rxtx_factor": 1.0,
+        "swap_mb": 128
+    },
+    "tags": [
+        "general-purpose"
+    ],
+    "visibility": "PUBLIC",
+    "_links":  {
+        "self": {
+            "href": "/server_types/7a6aba30-a3c0-11e3-a5e2-0800200c9a66"
+        },
+        "describedby": {
+            "href": "/schemas/server_type"
+        }
+    }
+}
+```
+
+### /server_types/{id}/tags
+
+Operations on the collection of tags for a server type.
+
++ Parameters
+    + id (string, `7a6aba30-a3c0-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server type
+
+#### GET
+
+Retrieve a server type's collection of tags by the server's *id*.
+
++ Response 200 (application/json)
+
+```json
+[
+    "general-purpose"
+]
+```
+
+#### PUT
+
+Replaces a server type's collection of tags.
+
++ Request (application/json)
+
+```json
+[
+    "general-purpose",
+    "generic"
+]
+```
+
++ Response 204 (application/json)
+
+#### DELETE
+
+Deletes all of a server type's collection of tags.
+
++ Response 204 (application/json)
+
+### /server_types/{id}/tags/{tag}
+
+Operations on individual tags on a server type.
+
++ Parameters
+    + id (string, `7a6aba30-a3c0-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server type
+    + `tag` (string, `general-purpose` ... The string to tag the resource with
+
+#### PUT
+
+Tag a server type with a specific string.
+
++ Response 204 (application/json)
+
+#### DELETE
+
+Delete a tag from a server type.
+
++ Response 204 (application/json)
+
+### /server_types/{id}/shares
+
+Operations on the collection of entities that may use a server type.
+
++ Parameters
+    + id (string, `7a6aba30-a3c0-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server type
+
+#### GET
+
+Retrieve the collection of entities that may use a server type by it's *id*.
+
++ Response 200 (application/json)
+
+```json
+{
+    "users": [
+        "781247cf-7bec-4e84-86ea-3cbcee48ae6d",
+        "60536efb-2e6e-4efc-9d39-fe8113292e52"
+    ],
+    "projects": [
+        "fd2ab3c0-d822-437f-b956-9e60e7d0fb69"
+    ]
+}
+```
+
+#### PUT
+
+Replaces the collection of entities that may use a server type.
+
++ Request (application/json)
+
+```json
+{
+    "users": [
+        "60536efb-2e6e-4efc-9d39-fe8113292e52"
+    ],
+    "projects": [
+    ]
+}
+```
+
++ Response 204 (application/json)
+
+#### DELETE
+
+Deletes the entire collection of entities that may use a server type.
+This action makes the original creator of the server type the only
+normal user of the Compute API that may use the server type.
+
++ Response 204 (application/json)
+
+### /server_types/{id}/shares/users/{user}
+
+Operations to add or remove access to a server type for a specific user.
+
++ Parameters
+    + id (string, `7a6aba30-a3c0-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server type
+    + `user` (string, `60536efb-2e6e-4efc-9d39-fe8113292e52` ... UUID identifier
+      for the user to modify access to this server type
+
+#### PUT
+
+Enable access to a server type to a particular user.
+
++ Response 204 (application/json)
+
+#### DELETE
+
+Remove access to a server type from a particular user. 
+
++ Response 204 (application/json)
+
+### /server_types/{id}/shares/projects/{project}
+
+Operations to add or remove access to a server type for a specific project.
+
++ Parameters
+    + id (string, `7a6aba30-a3c0-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server type
+    + `user` (string, `60536efb-2e6e-4efc-9d39-fe8113292e52` ... UUID identifier
+      for the project to modify access to this server type
+
+#### PUT
+
+Enable access to a server type to a particular project.
+
++ Response 204 (application/json)
+
+#### DELETE
+
+Remove access to a server type from a particular project. 
+
++ Response 204 (application/json)
+
+## GET /server_types{?limit,marker,tag}
+
+Retrieve a collection of server types.
+
+> **Note**: The server types returned by this call include all publicly-visible
+> server types, any server types created by the requesting user, and any server
+> types shared with the requesting user.
+
++ Parameters
+    + limit = `20` (optional, number) ... Maximum number of results to return
+    + marker (optional, string, `1593e080-a354-11e3-a5e2-0800200c9a66`) ... A UUID
+      identifier of the last record on the previous page of results.
+    + tag (optional, multiple string, `general-purpose`) ... Filters the results on
+      server types with any matching tag.
+
++ Response 200 (application/json)
+
+```json
+{
+    "server_types": [
+        {
+            "description": "General purpose low-CPU, low-memory, "
+                           "small-root-disk type of server.",
+            "id": "7a6aba30-a3c0-11e3-a5e2-0800200c9a66",
+            "name": "m1.micro",
+            "shares": {},
+            "spec": {
+                "memory_mb": 128,
+                "root_disk_gb": 8,
+                "cpu_units": 1,
+                "rxtx_factor": 1.0,
+                "swap_mb": 128
+            },
+            "tags": [
+                "general-purpose"
+            ],
+            "visibility": "PUBLIC",
+            "_links":  {
+                "self": {
+                    "href": "/server_types/7a6aba30-a3c0-11e3-a5e2-0800200c9a66"
+                },
+                "describedby": {
+                    "href": "/schemas/server_type"
+                }
+            }
+        },
+        {
+            "description": "CPU-intensive, high-memory, "
+                           "small-root-disk type of server.",
+            "id": "1593e080-a354-11e3-a5e2-0800200c9a66",
+            "name": "c1.xlarge",
+            "shares": {},
+            "spec": {
+                "memory_mb": 32768,
+                "root_disk_gb": 8,
+                "cpu_units": 8,
+                "rxtx_factor": 2.0,
+                "swap_mb": 32768
+            },
+            "tags": [
+                "hpc"
+            ],
+            "visibility": "PUBLIC",
+            "_links":  {
+                "self": {
+                    "href": "/server_types/1593e080-a354-11e3-a5e2-0800200c9a66"
+                },
+                "describedby": {
+                    "href": "/schemas/server_type"
+                }
+            }
+        }
+    ],
+    "_links": {
+        "self": {
+            "href": "/server_types?limit=2"
+        },
+        "next": {
+            "href": "/server_types?limit=2&marker=1593e080-a354-11e3-a5e2-0800200c9a66"
+        }
+    }
+}
+```
+
+# Group Server Task
+
+A server task is a related set of actions that are or have been executed
+against a server.
+
+Each server task has a *state* attribute. This attribute is a string with
+one of the following values:
+
+ - `RUNNING`
+ - `ABORTED`
+ - `COMPLETED`
+ - `TIMED_OUT`
+
+Each server task contains an *action* attribute. This attribute is a string
+with one of the following values:
+
+ - `CREATE`
+ - `SNAPSHOT`
+ - `BACKUP`
+ - `UPDATE_PASSWORD`
+ - `RESIZE`
+ - `REBOOT`
+ - `HARD_REBOOT`
+ - `PAUSE`
+ - `UNPAUSE`
+ - `SUSPEND`
+ - `RESUME`
+ - `POWER_OFF`
+ - `POWER_ON`
+ - `RESCUE`
+ - `UNRESCUE`
+ - `REBUILD`
+ - `MOVE` (These were actions previously called, variously, migrate,
+           live-migrate, and block-migrate)
+ - `TERMINATE`
+ - `RESTORE`
+ - `SHELVE`
+ - `SHELVE_OFFLOAD`
+ - `UNSHELVE`
+ - `ATTACH_BLOCK_DEVICE`
+ - `DETACH_BLOCK_DEVICE`
+ - `ATTACH_NETWORK_INTERFACE`
+ - `DETACH_NETWORK_INTERFACE`
+
+## POST /servers/{server}/tasks
+
+Starts a task against a *server*.
+
+> **Note**: Any action listed in the Server Task section may be specified
+> except `CREATE`. When a server is launched with the 
+> `POST /projects/{project}/servers` call, Nova will add a Server Task to the
+> server for the `CREATE` action.
+
++ Parameters
+    + server (string, `a7728150-a34f-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server.
+
++ Request (application/json)
+
+```json
+{
+    "action": "REBOOT"
+}
+```
+
++ Response 202 (application/json)
+
+```json
+{
+    "action": "REBOOT",
+    "created_at": "2014-04-14T02:15:15Z",
+    "created_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+    "id": "85fc465a-8809-4b7a-bce2-4c6ff5b78763",
+    "server_id": "53626cb0-a34f-11e3-a5e2-0800200c9a66",
+    "state": "RUNNING",
+    "_links":  {
+        "self": {
+            "href": "/server_tasks/53626cb0-a34f-11e3-a5e2-0800200c9a66"
+        },
+        "describedby": {
+            "href": "/schemas/server_task"
+        },
+        "rel/server_task_items": {
+            "href": "/server_tasks/53626cb0-a34f-11e3-a5e2-0800200c9a66/items"
+        }
+    }
+}
+```
+
+## GET /server_tasks/{id}
+
+Retrieve a server task by its *id*.
+
++ Parameters
+    + id (string, `85fc465a-8809-4b7a-bce2-4c6ff5b78763`) ... A UUID identifier
+      for the server task
+
++ Response 200 (application/json)
+
+```json
+{
+    "action": "CREATE",
+    "created_at": "2014-04-14T02:15:15Z",
+    "created_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+    "id": "85fc465a-8809-4b7a-bce2-4c6ff5b78763",
+    "server_id": "53626cb0-a34f-11e3-a5e2-0800200c9a66",
+    "state": "RUNNING",
+    "_links":  {
+        "self": {
+            "href": "/server_tasks/53626cb0-a34f-11e3-a5e2-0800200c9a66"
+        },
+        "describedby": {
+            "href": "/schemas/server_task"
+        },
+        "rel/server_task_items": {
+            "href": "/server_tasks/53626cb0-a34f-11e3-a5e2-0800200c9a66/items"
+        }
+    }
+}
+```
+
+## GET /servers/{server}/tasks{?limit,marker,since,state}
+
+Retrieve a collection of server tasks for a specific *server*.
+
+> **Note**: The entire collection of tasks for a server represents the full
+> history of actions taken against the server through the OpenStack Compute
+> API.
+
++ Parameters
+    + server (string, `a7728150-a34f-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server.
+    + limit = `20` (optional, number) ... Maximum number of results to return
+    + marker (optional, string, `3699f74d-af95-406d-b38e-d2b86f84a9d0`) ... A UUID
+      identifier of the last record on the previous page of results.
+    + since (optional, datetime, `2013-12-23T10:02:42Z`) ... An ISO-8601 datetime
+      to filter tasks that were started after that time.
+    + state (optional, string, `RUNNING`) ... Filters results to only tasks in the
+      specified state.
+
++ Response 200 (application/json)
+
+```json
+{
+    "tasks": [
+        {
+            "action": "CREATE",
+            "created_at": "2014-04-14T02:15:15Z",
+            "created_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+            "id": "85fc465a-8809-4b7a-bce2-4c6ff5b78763",
+            "server_id": "53626cb0-a34f-11e3-a5e2-0800200c9a66",
+            "state": "RUNNING",
+            "_links":  {
+                "self": {
+                    "href": "/server_tasks/85fc465a-8809-4b7a-bce2-4c6ff5b78763"
+                },
+                "describedby": {
+                    "href": "/schemas/server_task"
+                },
+                "rel/server_task_items": {
+                    "href": "/server_tasks/85fc465a-8809-4b7a-bce2-4c6ff5b78763/items"
+                }
+            }
+        },
+        {
+            "action": "RESIZE",
+            "created_at": "2013-12-23T10:02:42Z",
+            "created_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+            "id": "3759ef44-2b7d-4981-b286-418ca50fe005",
+            "server_id": "53626cb0-a34f-11e3-a5e2-0800200c9a66",
+            "state": "ABORTED",
+            "_links":  {
+                "self": {
+                    "href": "/server_tasks/3759ef44-2b7d-4981-b286-418ca50fe005"
+                },
+                "describedby": {
+                    "href": "/schemas/server_task"
+                },
+                "rel/server_task_items": {
+                    "href": "/server_tasks/3759ef44-2b7d-4981-b286-418ca50fe005/items"
+                }
+            }
+        }
+    ],
+    "_links": {
+        "self": {
+            "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66/tasks?limit=2"
+        },
+        "next": {
+            "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66/tasks?limit=2&marker=3759ef44-2b7d-4981-b286-418ca50fe005"
+        }
+    }
+}
+```
+
+# Group Server Task Item
+
+A server task item is a single action that is executed or event that happens
+in the course of running a server task against a server.
+
+Each server task item has a *state* attribute. This attribute is a string with
+one of the following values:
+
+ - `WAITING`
+ - `RUNNING`
+ - `ABORTED`
+ - `COMPLETED`
+ - `TIMED_OUT`
+
+Depending on the action of the item's task, each item will have an action
+as well:
+
+ - For tasks with action `CREATE`
+   - `SCHEDULING`
+   - `BLOCK_DEVICE_MAPPING`
+   - `NETWORKING`
+   - `SPAWNING`
+ - For tasks with action `SNAPSHOT`
+   - `SNAPSHOTTING`
+   - `UPLOADING`
+ - For tasks with action `BACKUP` (TODO: Why/how is this different from snapshot?)
+   - `SNAPSHOTTING`
+   - `UPLOADING`
+ - For tasks with action `UPDATE_PASSWORD`
+   - `UPDATING_PASSWORD`
+ - For tasks with action `RESIZE`
+   - `PREPARING`
+   - `MIGRATING`
+   - `FINALIZING`
+ - For tasks with action `REBOOT`
+   - `REBOOTING`
+ - For tasks with action `HARD_REBOOT`
+   - `REBOOTING`
+ - For tasks with action `PAUSE`
+   - `PAUSING`
+ - For tasks with action `UNPAUSE`
+   - `UNPAUSING`
+ - For tasks with action `SUSPEND`
+   - `SUSPENDING`
+ - For tasks with action `RESUME`
+   - `RESUMING`
+ - For tasks with action `POWER_OFF`
+   - `POWERING_OFF`
+ - For tasks with action `POWER_ON`
+   - `POWERING_ON`
+ - For tasks with action `RESCUE`
+   - `RESCUING`
+ - For tasks with action `UNRESCUE`
+   - `UNRESCUING`
+ - For tasks with action `REBUILD`
+   - `REBUILDING`
+   - `REBUILDING_BLOCK_DEVICES`
+   - `SPAWNING`
+ - For tasks with action `MOVE`
+   - TODO(jaypipes): Unmuddy this from RESIZE...
+ - For tasks with action `TERMINATE`
+   - `TERMINATING`
+ - For tasks with action `RESTORE`
+   - `RESTORING`
+ - For tasks with action `SHELVE`
+   - `SHELVING`
+   - `PREPARING_UPLOAD`
+   - `UPLOADING`
+ - For tasks with action `SHELVE_OFFLOAD`
+   - `SHELVING_OFFLOADING`
+ - For tasks with action `UNSHELVE`
+   - `UNSHELVING`
+ - For tasks with action `ATTACH_BLOCK_DEVICE`
+   - `ATTACHING_BLOCK_DEVICE`
+ - For tasks with action `DETACH_BLOCK_DEVICE`
+   - `DETACHING_BLOCK_DEVICE`
+ - For tasks with action `ATTACH_NETWORK_INTERFACE`
+   - `ATTACHING_NETWORK_INTERFACE`
+ - For tasks with action `DETACH_NETWORK_INTERFACE`
+   - `DETACHING_NETWORK_INTERFACE`
+
+Each server task item has tmestamps indicating when the item was created,
+started and ended.
+
+> **Note**: A user of the Compute API has no ability to create a task item
+> through the Compute API itself. Nova components will create task items in
+> the course of running the task, and the task items API is readonly to
+> provide a glimpse into the progress of a running task.
+
+## GET /servers_tasks/{task}/items{?limit,marker,since,state}
+
+Retrieve a collection of server task items for a specific *task*.
+
+> **Note**: The entire collection of task items for a server task represents
+> the full history of events that occurred during the execution of a task.
+
++ Parameters
+    + task (string, `3759ef44-2b7d-4981-b286-418ca50fe005`) ... A UUID identifier
+      for the server task.
+    + limit = `20` (optional, number) ... Maximum number of results to return
+    + marker (optional, string, `3699f74d-af95-406d-b38e-d2b86f84a9d0`) ... A UUID
+      identifier of the last record on the previous page of results.
+    + since (optional, datetime, `2013-12-23T10:02:42Z`) ... An ISO-8601 datetime
+      to filter task items that were started after that time.
+    + state (optional, string, `WAITING`) ... Filters results to only task items
+      in the specified state.
+
++ Response 200 (application/json)
+
+```json
+{
+    "items": [
+        {
+            "action": "SCHEDULING",
+            "created_at": "2014-04-14T02:15:15.002111Z",
+            "ended_at": "2014-04-14T02:15:16.717219Z",
+            "id": "c7dc1acb-5c2f-488d-a3c0-145d3aeae582",
+            "task_id": "3759ef44-2b7d-4981-b286-418ca50fe005",
+            "started_at": "2014-04-14T02:15:15.004727Z",
+            "state": "COMPLETED",
+        },
+        {
+            "action": "BLOCK_DEVICE_MAPPING",
+            "created_at": "2014-04-14T02:15:15.002111Z",
+            "ended_at": null,
+            "id": "b41a43e4-3129-4a22-b9d9-3e75483b54ef",
+            "task_id": "3759ef44-2b7d-4981-b286-418ca50fe005",
+            "started_at": "2014-04-14T02:15:16.981721Z",
+            "state": "RUNNING",
+        }
+    ],
+    "_links": {
+        "self": {
+            "href": "/servers_tasks/3759ef44-2b7d-4981-b286-418ca50fe005/items?limit=2"
+        },
+        "next": {
+            "href": "/servers_tasks/3759ef44-2b7d-4981-b286-418ca50fe005/items?limit=2&marker=b41a43e4-3129-4a22-b9d9-3e75483b54ef"
+        }
+    }
+}
+```
+
+# Group Server
+
+The server is the main resource exposed by the OpenStack Compute API. There
+are a number of subresources and collections of subresources that are
+attached to a server resource. This group describes operations on the server
+and these subresources.
+
+A server is a virtual machine that runs in an OpenStack cloud. It is owned by
+a single *project* and is launched from a *server template* that is a base disk
+image, a bootable volume, or a snapshot of another server.
+
+Each server has the following attributes that are readable through the
+OpenStack Compute API:
+
+ - `block_devices` (list of dicts) ... A list of dictionaries containing
+   information about the block devices attached to the server.
+ - `hostname` (string, `app-server-1`) ... This is the hostname of
+   the server. It must be unique among all servers within a project.
+ - `id` (string, `53626cb0-a34f-11e3-a5e2-0800200c9a66`) ... The UUID of the
+   server.
+ - `launch_keypair_id` (string, `0a677974-e122-4d71-ab95-4549058508ee`) ...
+   UUID of the keypair that was specified at launch time.
+ - `launched_at` (datetime, `2014-04-14T02:15:16Z`) ... The timestamp of when
+   the server was launched.
+ - `launched_by` (string, `fbed1cc7-2f7a-4ec3-af5b-6467a8712eb0`) ... The UUID
+   of the user that launched the server.
+ - `networking` (dict) ... A dictionary containing information about the
+   network interfaces on the server.
+ - `power_state` (string, `RUNNING`) ... The power state of the server. See
+   possible values below.
+ - `placement_id` (string, `ecfadb0e-ac9d-483c-9ad0-c8d8f90654a9`) ... The UUID of
+   the placement that contains this server.
+ - `spec.memory_mb` (number, `2048`) ... Amount of RAM in megabytes that the
+   server is allocated.
+ - `spec.root_disk_gb` (number, `8`) ... Amount of disk space in gigabytes
+   allocated for the server's root disk.
+ - `spec.cpu_units` (number, `4`) ... Number of CPU units allocated to the
+   server.
+ - `project_id` (string, `a7728150-a34f-11e3-a5e2-0800200c9a66`) ... The UUID
+   of the project that owns this server.
+ - `properties` (dict) ... Custom key/value properties tied to the server.
+ - `template_id` (string, `fe48b370-a352-11e3-a5e2-0800200c9a66`) ... The UUID
+   of the server template that was used when launching the server.
+ - `tags` (list of strings, `windows`) ... A list of strings that tag the server.
+ - `virt_state` (string, `RUNNING`) ... The virt state of the server. See
+   possible values below.
+
+In addition to normally returned attributes, there shall be an `_elevated` attribute
+returned in the server record response. For users with elevated permissions,
+the `_elevated` attribute would be populated with additional attributes:
+
+ - `compute_node_hostname` (string, `barenode1`) ... The hostname of the compute
+   node that this server is housed on.
+ - `properties` (dict) ... Custom properties of the server that should only be
+   readable by users with elevated privileges.
+
+Each server has a *power_state* attribute, which is a string with one of the
+following values:
+
+ - `RUNNING`
+ - `PAUSED`
+ - `SHUTDOWN`
+ - `CRASHED`
+ - `SUSPENDED`
+
+In addition to the power_state, each server also has a *virt_state* attribute,
+which is a string with one of the following values:
+
+ - `ACTIVE`
+ - `BUILDING`
+ - `PAUSED`
+ - `SUSPENDED`
+ - `STOPPED`
+ - `RESCUED` (TODO(jaypipes): Remove this. It is not an end state)
+ - `RESIZED` (TODO(jaypipes): Remove this. It is not an end state)
+ - `TERMINATED`
+ - `SHELVED`
+ - `SHELVED_OFFLOADED`
+ - `ERROR`
+
+> **A note about the server template**: When launched, the ID of a server
+> template is provided. This ID is the UUID identifier of a base disk image,
+> a bootable volume, or a snapshot of a server that is used as the basis of the
+> server that is launched. The OpenStack Compute API does not actually expose
+> the server template resource. Server template resources are exposed by the
+> OpenStack Image and OpenStack Block Storage APIs (images/ and volumes/
+> respectively).
+
+> **A note about the placement**: Each server lives in a generic container signified
+> by the *placement_id* attribute. Unlike the old v2/v3 Compute API, there is no
+> concept of an EC2 Availability Zone built into the vNext Compute API. Instead
+> of the concept of an availability zone, the concept of a generic container called
+> a placement is introduced. Placements may or may not have other placements as children.
+> What SLA or failure boundaries are defined for a placement is left entirely up to
+> the deployer of the OpenStack Compute service.
+
+> **Note**: There is no DELETE operation against a server in the Compute API.
+> To terminate a server, you would POST /servers/{server}/tasks with a task
+> with action `TERMINATE`. Archival of terminated server information is outside
+> the scope of a public OpenStack Compute control API.
+
+## POST /project/{project}/servers
+
+Create one or more servers in a project.
+
+There are two main sections to the request body: *defaults* and *servers*.
+
+The defaults section is used to set the default attributes of servers when
+creating more than one server. Instead of specifying the same server type,
+keypair or placement for each server you create, you can specify this once in the
+defaults section.
+
+Within the defaults section is a special key called `hostname_pattern`. 
+This field is a regex expression that may be used to define hostnames
+for multiple servers launched in this request. The `%(rand_name)d` symbol
+is interpolated as a random number. You can limit the number of digits by
+specifying a length like so: `%(rand_num)5d`.
+
+Also in the defaults section is an `affinity` mapping that contains
+instructions for Nova to take into account when determining which host
+should house a server instance. The `affinity` section contains two elements,
+`near` and `not_near`, each of which have two optional elements, `server_tags`
+and `server_ids` which are lists of tags or server UUIDs to place the requested
+servers near or not near.
+
+> **Note**: This feature was called the "scheduler hints" API extensions
+> in the v2/v3 Nova API.
+
+The servers section is a list of dictionaries, one per server you want to
+create. Attributes that *must* be unique for each server -- such as the
+server's *hostname* attribute, can be set here, along with overrides for
+attribute values where the value specified in the defaults section is not
+wanted.
+
+The request for launching one or more servers is pre-validated before
+attempting to launch any of the servers. A failure response will indicate
+errors that were found in this pre-validation procedure. 
+
+A success response will always be a list of dictionaries that contain
+attributes about each server that was launched:
+
+ - `id` (string) ... The UUID of the newly-created server resource.
+ - `launched_at` (datetime) ... The ISO8601 timestamp of when the launch
+   task for the server was started.
+
+> **Note**: Failure of any individual server to launch will *not* be returned
+> in a failure response to this API call. Instead, a user may check the status
+> of a server and a list of the server's latest task actions using calls to
+> `HEAD /servers/{id}` and `GET /servers/{id}/tasks`
+
++ Request (application/json)
+
+```json
+{
+    "defaults": {
+        "affinity": {
+            "near": {
+                "server_ids": [],
+                "server_tags": ["general"]
+            },
+            "not_near": {
+                "server_ids": ["11719417-a465-45ff-96a8-dd843e70c67a"],
+                "server_tags": []
+            }
+        },
+        "hostname_pattern": "app-server-%{rand_num)5d",
+        "keypair_id": "cffd003d-ca59-4be6-856e-054a98ac3567",
+        "placement_id": "12aed151-2431-4bd5-8be5-7c050c4f3254",
+        "template_id": "fe48b370-a352-11e3-a5e2-0800200c9a66",
+        "type_id": "1593e080-a354-11e3-a5e2-0800200c9a66",
+        "user_data": "IyEvYmluL3NoCmVjaG8gPT09PT09PT09IEhFTExPID09PT09"
+    },
+    "servers": [
+        {
+            "hostname": "app-server-1",
+            "keypair_id": "5b3866b9-77d7-4afc-a095-e400919ade97"
+        },
+        {
+            "hostname": "app-server-2",
+            "type_id": "98f5c367a-a354-11e3-a5e2-0800200c9a66"
+        },
+    ],
+}
+```
+
++ Response 202 (application/json)
+
+```json
+[
+    {
+        "id": "53626cb0-a34f-11e3-a5e2-0800200c9a66",
+        "launched_at": "2014-03-02T23:20:19",
+        "_links": {
+            "self": {
+                "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66"
+            },
+            "describedby": {
+                "href": "/schemas/server"
+            },
+            "rel/server_tasks": {
+                "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66/tasks"
+            }
+        }
+    },
+    {
+        "id": "3699f74d-af95-406d-b38e-d2b86f84a9d0",
+        "launched_at": "2014-03-03T03:20:19",
+        "_links": {
+            "self": {
+                "href": "/servers/3699f74d-af95-406d-b38e-d2b86f84a9d0",
+            },
+            "describedby": {
+                "href": "/schemas/server"
+            },
+            "rel/server_tasks": {
+                "href": "/servers/3699f74d-af95-406d-b38e-d2b86f84a9d0/tasks",
+            }
+        }
+    }
+]
+```
+
+## /servers/{id}
+
++ Parameters
+    + id (string, `53626cb0-a34f-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server
+
+### PATCH
+
+Update a server's ownership or hostname.
+
+> **Note**: A server's ownership may be transferred from one project to another
+> using this call. The new owning project's ID should be the project_id attribute
+> in the request payload.
+
++ Request (application/json)
+
+```json
+{
+    "project_id": "a7728150-a34f-11e3-a5e2-0800200c9a66",
+    "hostname": "new-example-server-2"
+}
+
+```
+
++ Response 204
+
+### HEAD
+
+Retrieve a server's state by its *id*.
+
++ Response 200
+    + Headers
+
+            X-OpenStack-Compute-Server-Virt-State: ACTIVE
+            X-OpenStack-Compute-Server-Power-State: RUNNING
+
+### GET
+
+Retrieve a server by its *id*.
+
++ Response 200 (application/json)
+
+```json
+{
+    "block_devices": [
+        {
+            "type": "EPHEMERAL",
+            "device": "/dev/sda"
+        },
+        {
+            "type": "PERSISTENT",
+            "device": "/dev/sdb"
+        }
+    ],
+    "hostname": "example-server-1",
+    "id": "53626cb0-a34f-11e3-a5e2-0800200c9a66",
+    "launch_keypair_id": "cffd003d-ca59-4be6-856e-054a98ac3567", 
+    "launched_at": "2014-03-02T23:20:19",
+    "launched_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+    "networking": {
+        "access": {
+            "ip4": [
+                "65.6.29.230"
+            ],
+            "ip6": [
+                "::babe:65.6.29.230"
+            ]
+        }
+        "interfaces": {
+            "eth0": {
+                "ip4": "10.0.1.4",
+                "mac": "76:26:47:3d:9b:8a"
+            },
+            "eth1": {
+                "ip4": "65.6.29.230",
+                "ip6": "::babe:65.6.29.230",
+                "mac": "d1:39:55:04:ab:fb"
+            }
+        }
+    },
+    "power_state": "RUNNING",
+    "project_id": "a7728150-a34f-11e3-a5e2-0800200c9a66",
+    "properties": {
+        "role": "appserver",
+    },
+    "placement_id": "12aed151-2431-4bd5-8be5-7c050c4f3254",
+    "spec": {
+        "memory_mb": 32768,
+        "root_disk_gb": 8,
+        "cpu_units": 8
+    },
+    "tags": [
+        "linux",
+        "ubuntu"
+    ],
+    "template_id": "fe48b370-a352-11e3-a5e2-0800200c9a66",
+    "virt_state": "ACTIVE",
+    "_elevated": {},
+    "_links": {
+        "self": {
+            "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66"
+        },
+        "describedby": {
+            "href": "/schemas/server"
+        },
+        "rel/server_tasks": {
+            "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66/tasks"
+        }
+    }
+}
+```
+
+## GET /projects/{project}/servers/{hostname}
+
+Retrieve a server by its *project* and *hostname*.
+
++ Parameters
+    + project (string, `a7728150-a34f-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the project.
+    + hostname (string, `app-server-1`) ... A hostname of a server in the project.
+
++ Response 200 (application/json)
+
+```json
+{
+    "block_devices": [
+        {
+            "type": "EPHEMERAL",
+            "device": "/dev/sda"
+        },
+        {
+            "type": "PERSISTENT",
+            "device": "/dev/sdb"
+        }
+    ],
+    "hostname": "example-server-1",
+    "id": "53626cb0-a34f-11e3-a5e2-0800200c9a66",
+    "launch_keypair_id": "cffd003d-ca59-4be6-856e-054a98ac3567", 
+    "launched_at": "2014-03-02T23:20:19",
+    "launched_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+    "networking": {
+        "access": {
+            "ip4": [
+                "65.6.29.230"
+            ],
+            "ip6": [
+                "::babe:65.6.29.230"
+            ]
+        }
+        "interfaces": {
+            "eth0": {
+                "ip4": "10.0.1.4",
+                "mac": "76:26:47:3d:9b:8a"
+            },
+            "eth1": {
+                "ip4": "65.6.29.230",
+                "ip6": "::babe:65.6.29.230",
+                "mac": "d1:39:55:04:ab:fb"
+            }
+        }
+    },
+    "power_state": "RUNNING",
+    "project_id": "a7728150-a34f-11e3-a5e2-0800200c9a66",
+    "properties": {
+        "role": "appserver",
+    },
+    "placement_id": "12aed151-2431-4bd5-8be5-7c050c4f3254",
+    "spec": {
+        "memory_mb": 32768,
+        "root_disk_gb": 8,
+        "cpu_units": 8
+    },
+    "tags": [
+        "linux",
+        "ubuntu"
+    ],
+    "template_id": "fe48b370-a352-11e3-a5e2-0800200c9a66",
+    "virt_state": "ACTIVE",
+    "_elevated": {},
+    "_links": {
+        "self": {
+            "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66"
+        },
+        "describedby": {
+            "href": "/schemas/server"
+        },
+        "rel/server_tasks": {
+            "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66/tasks"
+        }
+    }
+}
+```
+
+### /servers/{id}/tags
+
+Operations on the collection of tags for a server.
+
++ Parameters
+    + id (string, `7a6aba30-a3c0-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server
+
+#### GET
+
+Retrieve a server's collection of tags by the server's *id*.
+
++ Response 200 (application/json)
+
+```json
+[
+    "general-purpose"
+]
+```
+
+#### PUT
+
+Replaces a server's collection of tags.
+
++ Request (application/json)
+
+```json
+[
+    "general-purpose",
+    "generic"
+]
+```
+
++ Response 204 (application/json)
+
+#### DELETE
+
+Deletes all of a server's collection of tags.
+
++ Response 204 (application/json)
+
+### /servers/{id}/tags/{tag}
+
+Operations on individual tags on a server.
+
++ Parameters
+    + id (string, `7a6aba30-a3c0-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server
+    + `tag` (string, `general-purpose` ... The string to tag the resource with
+
+#### PUT
+
+Tag a server with a specific string.
+
++ Response 204 (application/json)
+
+#### DELETE
+
+Delete a tag from a server.
+
++ Response 204 (application/json)
+
+## GET /projects/{project}/servers{?limit,marker,since,virt_state,power_state,launched_by}
+
+Retrieve a collection of servers in a specific *project*. This is the
+GET call that normal users of the Compute API will use to return information
+about the servers in one of their projects.
+
++ Parameters
+    + project (string, `a7728150-a34f-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the project.
+    + limit = `20` (optional, number) ... Maximum number of results to return
+    + marker (optional, string, `3699f74d-af95-406d-b38e-d2b86f84a9d0`) ... A UUID
+      identifier of the last record on the previous page of results.
+    + since (optional, datetime, `2013-12-23T10:02:42Z`) ... An ISO-8601 datetime
+      to filter servers that were *launched* after that time.
+    + virt_state = `ACTIVE` (optional, list of strings, `ACTIVE`) ... Filters results
+      to only servers in one of the specified virt states.
+    + power_state = `RUNNING` (optional, list of strings, `RUNNING`) ... Filters
+      results to only servers in one of the specified power states.
+    + launched_by (optional, list of strings, `a7728150-a34f-11e3-a5e2-0800200c9a66`)
+      ... Filters server records by UUIDs of users that launched the servers.
+
++ Response 200 (application/json)
+
+```json
+{
+    "servers": [
+        {
+            "hostname": "example-server-1",
+            "id": "53626cb0-a34f-11e3-a5e2-0800200c9a66",
+            "launched_at": "2014-03-02T23:20:19",
+            "launched_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+            "power_state": "RUNNING",
+            "project_id": "a7728150-a34f-11e3-a5e2-0800200c9a66",
+            "placement_id": "12aed151-2431-4bd5-8be5-7c050c4f3254",
+            "spec": {
+                "memory_mb": 32768,
+                "root_disk_gb": 8,
+                "cpu_units": 8
+            },
+            "template_id": "fe48b370-a352-11e3-a5e2-0800200c9a66",
+            "virt_state": "ACTIVE",
+            "_elevated": {},
+            "_links": {
+                "self": {
+                    "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66"
+                },
+                "describedby": {
+                    "href": "/schemas/server"
+                },
+                "rel/server_tasks": {
+                    "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66/tasks"
+                }
+            }
+        },
+        {
+            "hostname": "example-server-2",
+            "id": "3699f74d-af95-406d-b38e-d2b86f84a9d0"
+            "launched_at": "2014-03-03T03:20:19",
+            "launched_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+            "power_state": "RUNNING",
+            "project_id": "a7728150-a34f-11e3-a5e2-0800200c9a66",
+            "placement_id": "12aed151-2431-4bd5-8be5-7c050c4f3254",
+            "spec": {
+                "memory_mb": 32768,
+                "root_disk_gb": 8,
+                "cpu_units": 8
+            },
+            "template_id": "fe48b370-a352-11e3-a5e2-0800200c9a66",
+            "virt_state": "ACTIVE",
+            "_elevated": {},
+            "_links": {
+                "self": {
+                    "href": "/servers/3699f74d-af95-406d-b38e-d2b86f84a9d0",
+                },
+                "describedby": {
+                    "href": "/schemas/server"
+                },
+                "rel/server_tasks": {
+                    "href": "/servers/3699f74d-af95-406d-b38e-d2b86f84a9d0/tasks",
+                }
+            }
+        }
+    ],
+    "_links": {
+        "self": {
+            "href": "/projects/a7728150-a34f-11e3-a5e2-0800200c9a66/servers?limit=2"
+        },
+        "next": {
+            "href": "/projects/a7728150-a34f-11e3-a5e2-0800200c9a66/servers?limit=2&marker=3699f74d-af95-406d-b38e-d2b86f84a9d0"
+        }
+    }
+}
+```
+
+## GET /servers{?limit,marker,since,project,virt_state,power_state,launched_by}
+
+Retrieve a collection of servers. 
+
+For normal users of the Compute API, this call will return server records
+for any server that belongs to any project to which the user belongs.
+
+For users of the Compute API with elevated privileges, this call will return
+all server records that meet the parameterized filter criteria.
+
+> **Note**: For non-elevated users, specifying a project that the user does not
+> belong to or user IDs (launched_by parameter) that are not in one of those projects
+> shall lead to a response of `400 Bad Request`.
+
++ Parameters
+    + limit = `20` (optional, number) ... Maximum number of results to return
+    + marker (optional, string, `3699f74d-af95-406d-b38e-d2b86f84a9d0`) ... A UUID
+      identifier of the last record on the previous page of results.
+    + since (optional, datetime, `2013-12-23T10:02:42Z`) ... An ISO-8601 datetime
+      to filter servers that were *launched* after that time.
+    + project (optional, list of strings, `a7728150-a34f-11e3-a5e2-0800200c9a66`)
+      ... One or more UUID identifiers for the project to filter server records by.
+    + virt_state = `ACTIVE` (optional, list of strings, `ACTIVE`) ... Filters results
+      to only servers in one of the specified virt states.
+    + power_state = `RUNNING` (optional, list of strings, `RUNNING`) ... Filters
+      results to only servers in one of the specified power states.
+    + launched_by (optional, list of strings, `a7728150-a34f-11e3-a5e2-0800200c9a66`)
+      ... Filters server records by UUIDs of users that launched the servers.
+
++ Response 200 (application/json)
+
+```json
+{
+    "servers": [
+        {
+            "hostname": "example-server-1",
+            "id": "53626cb0-a34f-11e3-a5e2-0800200c9a66",
+            "launched_at": "2014-03-02T23:20:19",
+            "launched_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+            "power_state": "RUNNING",
+            "project_id": "a7728150-a34f-11e3-a5e2-0800200c9a66",
+            "placement_id": "12aed151-2431-4bd5-8be5-7c050c4f3254",
+            "spec": {
+                "memory_mb": 32768,
+                "root_disk_gb": 8,
+                "cpu_units": 8
+            },
+            "template_id": "fe48b370-a352-11e3-a5e2-0800200c9a66",
+            "virt_state": "ACTIVE",
+            "_elevated": {},
+            "_links": {
+                "self": {
+                    "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66"
+                },
+                "describedby": {
+                    "href": "/schemas/server"
+                },
+                "rel/server_tasks": {
+                    "href": "/servers/53626cb0-a34f-11e3-a5e2-0800200c9a66/tasks"
+                }
+            }
+        },
+        {
+            "hostname": "example-server-2",
+            "id": "3699f74d-af95-406d-b38e-d2b86f84a9d0"
+            "launched_at": "2014-03-03T03:20:19",
+            "launched_by": "c54b5b30-a353-11e3-a5e2-0800200c9a66",
+            "power_state": "RUNNING",
+            "project_id": "a7728150-a34f-11e3-a5e2-0800200c9a66",
+            "placement_id": "12aed151-2431-4bd5-8be5-7c050c4f3254",
+            "spec": {
+                "memory_mb": 32768,
+                "root_disk_gb": 8,
+                "cpu_units": 8
+            },
+            "template_id": "fe48b370-a352-11e3-a5e2-0800200c9a66",
+            "virt_state": "ACTIVE",
+            "_elevated": {},
+            "_links": {
+                "self": {
+                    "href": "/servers/3699f74d-af95-406d-b38e-d2b86f84a9d0",
+                },
+                "describedby": {
+                    "href": "/schemas/server"
+                },
+                "rel/server_tasks": {
+                    "href": "/servers/3699f74d-af95-406d-b38e-d2b86f84a9d0/tasks",
+                }
+            }
+        }
+    ],
+    "_links": {
+        "self": {
+            "href": "/projects/a7728150-a34f-11e3-a5e2-0800200c9a66/servers?limit=2"
+        },
+        "next": {
+            "href": "/projects/a7728150-a34f-11e3-a5e2-0800200c9a66/servers?limit=2&marker=3699f74d-af95-406d-b38e-d2b86f84a9d0"
+        }
+    }
+}
+```
+
+## GET /servers/{server}/console_log?{lines}
+
+Retrieve some or part of a server console log.
+
++ Parameters
+    + server (string, `a7728150-a34f-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server.
+    + lines = `65536` (optional, number) ... Maximum number of lines to
+      return.
+
++ Response 200 (plain/text)
+
+```
+Linux version 2.6.21.7-2.ec2.v1.2.fc8xen (root@domU-12-34-56-0A-78-01) (gcc version 4.1.2 20070925 (Red Hat 4.1.2-33)) #1 SMP Fri Nov 20 19:22:36 EST 2009
+BIOS-provided physical RAM map:
+sanitize start
+sanitize bail 0
+copy_e820_map() start: 0000000000000000 size: 000000006ac00000 end: 000000006ac00000 type: 1
+Xen: 0000000000000000 - 000000006ac00000 (usable)
+980MB HIGHMEM available.
+727MB LOWMEM available.
+NX (Execute Disable) protection: active
+```
+
+## GET /servers/{server}/consoles/{type}
+
+Retrieve a URI where a VNC, RDP or Spice console can be connected to.
+
++ Parameters
+    + server (string, `a7728150-a34f-11e3-a5e2-0800200c9a66`) ... A UUID identifier
+      for the server.
+    + type (string, `novnc`) ... The code for which
+      type of console to return a URI for. Acceptable values: [`novnc`, `xvpvnc`, `rdp`, `spice`].
+
++ Response 200 (application/json)
+
+```json
+{
+    "uri": "http://cloud.example.com:6080/token=12fad949-b355-4f3b-983d-cbe5f59703e6"
+}
+```
